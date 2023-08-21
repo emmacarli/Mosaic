@@ -14,7 +14,7 @@ logging.basicConfig(format = loggerFormat, level=logging.WARNING)
 logger = logging.getLogger()
 
 import katpoint
-from mosaic.beamforming import PsfSim, generate_nbeams_tiling
+from mosaic.beamforming import PsfSim, generate_nbeams_tiling, DelayPolynomial
 from mosaic.coordinate import createTilingRegion, readPolygonRegion, convert_sexagesimal_to_degree, convert_equatorial_coordinate_to_pixel
 from mosaic import __version__
 
@@ -53,7 +53,7 @@ def createBeamMatrix(antennaCoords, sourceCoord, observeTime, frequencies, beamN
                 shape_overlay=True, interpolation=interpolation)
     if "psf_fits" in output:
         newBeamShape.psf.write_fits(output["psf_fits"][0])
-    if ("tiling_plot" in output) or ("tiling_coordinate" in output) or ("tiling_region" in output):
+    if ("tiling_plot" in output) or ("tiling_coordinate" in output) or ("tiling_region" in output) or ("delays" in output):
 
         tiling = generate_nbeams_tiling(newBeamShape, beamNum, overlap, tilingMethod,
                 tilingShape, tilingParameter, tilingParameterCoordinateType)
@@ -68,6 +68,19 @@ def createBeamMatrix(antennaCoords, sourceCoord, observeTime, frequencies, beamN
             equatorial_coordinates = tiling.get_equatorial_coordinates()
             actualShape = tiling.meta["axis"]
             createTilingRegion(equatorial_coordinates, actualShape, output["tiling_region"])
+        if "delays" in output:
+            equatorial_coordinates = tiling.get_equatorial_coordinates()
+            targets = DelayPolynomial.make_katpoint_target(equatorial_coordinates)
+            
+            reference_antenna = makeKatPointAntenna(["ref, -30:42:39.8, 21:26:38.0, 1035.0",])[0]
+            delay = DelayPolynomial(antennaKat, newBeamShape.bore_sight.equatorial,targets,reference_antenna)
+            polynomials = delay.get_delay_polynomials(observeTime, 0.01)
+            beam_delay_differences = polynomials[int(output["delays"][2]),:,0]-polynomials[int(output["delays"][1]),:,0]
+            logger.info('The maximum delay difference for any antenna between beam {} and {} is {} s.'.format(output["delays"][2],output["delays"][1],max(beam_delay_differences)))
+            np.savetxt(output["delays"][0], beam_delay_differences)
+            print
+            
+
 
 def parseOptions(parser):
     # enable interpolation when ploting
@@ -77,6 +90,7 @@ def parseOptions(parser):
     parser.add_argument('--psf_fits', nargs='+', metavar="file [paras]", help='name for the psf fits file')
     parser.add_argument('--tiling_plot', nargs='+', metavar="file [paras]", help='filename for the tiling plot')
     parser.add_argument('--tiling_coordinate', nargs='+', metavar="file [paras]", help='filename for the tiling coordinate')
+    parser.add_argument('--delays', nargs=3, metavar="saved_file_name beam_num_1 beam_num_2", help='filename for the differential delays per antenna, reference beam number and difference beam number')
     parser.add_argument('--tiling_region', nargs=1, metavar="file", help='filename for the tiling region')
     parser.add_argument('--ants', nargs=1, metavar="file", help='antenna coodinates files')
     parser.add_argument('--resolution', nargs=1, metavar="asec", help='resolution in arcsecond')
@@ -142,7 +156,8 @@ def parseOptions(parser):
         output["tiling_coordinate"] = args.tiling_coordinate
     if args.tiling_region is not None:
         output["tiling_region"] = args.tiling_region[0]
-
+    if args.delays is not None:
+        output["delays"] = args.delays
 
     if args.ants is not None:
         with open(args.ants[0], 'r') as antFile:
